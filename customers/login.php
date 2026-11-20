@@ -1,54 +1,101 @@
 <?php 
 session_start();
+ 
+//    csrf token generation
+
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
 
 require_once "../config/database.php";
 
-$email_error = "";
-$password_error = "";
+$login_error = "";
+$email = "";
+
 
 if (isset ($_POST['login'])) {
-    $email = $_POST['email'];
-    $password = $_POST['password'];
+//   csrf token verificaiton 
+    if (
+        !isset($_POST['csrf_token']) ||
+        !isset($_SESSION['csrf_token']) ||
+        !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])
+    ) {
+        http_response_code(403);
+exit("Invalid CSRF token. Please refresh the page and try again.");
+    }
 
-    $query = "SELECT id, name, email, password, role FROM users WHERE email = ?";
+    $email = trim($_POST['email'] ?? "");
+    $password = $_POST['password'] ?? "";
+    
+    if ($email === "" || $password === "") {
+    $login_error = "Email and password are required!";
+} 
+elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+    $login_error = "Please enter a valid email address!";
+}
+else {
+
+
+     $query = "SELECT id, name, email, password, role FROM users WHERE email = ?";
 
     $stmt = mysqli_prepare($conn, $query);
+
+if ($stmt) {
+
     mysqli_stmt_bind_param($stmt, "s", $email);
-    mysqli_stmt_execute($stmt);
-    $result = mysqli_stmt_get_result($stmt);
 
-    if (mysqli_num_rows($result) > 0 ) {
+    if (mysqli_stmt_execute($stmt)) {
 
-       $user = mysqli_fetch_assoc($result);
+        $result = mysqli_stmt_get_result($stmt);
 
-       if (password_verify($password , $user['password'])){
+        if ($result) {
 
-       session_regenerate_id(true);
+            if (mysqli_num_rows($result) > 0) {
 
-$_SESSION['user_id'] = $user['id'];
-$_SESSION['user_name'] = $user['name'];
-$_SESSION['user_email'] = $user['email'];
-$_SESSION['user_role'] = $user['role'];
+                $user = mysqli_fetch_assoc($result);
 
-if ($user['role'] === 'admin'){
-    header("Location: ../admin/dashboard.php");
-} else {
-    header("Location: ../dashboard/index.php");
-}
+                if (password_verify($password, $user['password'])) {
 
-exit;
-        
-       } else {
+                    session_regenerate_id(true);
+                    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 
-          $password_error = "Invalid email or password!";
+                    $_SESSION['user_id'] = $user['id'];
+                    $_SESSION['user_name'] = $user['name'];
+                    $_SESSION['user_email'] = $user['email'];
+                    $_SESSION['user_role'] = $user['role'];
 
-       }
+                    if ($user['role'] === 'admin') {
+                        header("Location: ../admin/dashboard.php");
+                    } else {
+                        header("Location: ../dashboard/index.php");
+                    }
+
+                    exit;
+
+                } else {
+                    $login_error = "Invalid email or password!";
+                }
+
+            } else {
+                $login_error = "Invalid email or password!";
+            }
+
+        } else {
+            $login_error = "Something went wrong. Please try again later.";
+        }
 
     } else {
-
-       $email_error = "Invalid email or password!";
-
+        $login_error = "Something went wrong. Please try again later.";
     }
+
+    mysqli_stmt_close($stmt);
+
+} else {
+    $login_error = "Something went wrong. Please try again later.";
+}
+
+
+}
 }
 
 ?>
@@ -71,7 +118,6 @@ exit;
             z-index: 999;
         }
 
-        /* Ambient Glowing Background Elements */
         .portal-main-wrapper .ambient-blob-1 {
             position: absolute;
             top: -100px;
@@ -102,16 +148,15 @@ exit;
             position: relative;
             z-index: 1;
             width: 100%;
-            max-width: 630px; /* Width ko mazeed barha diya gaya hai */
+            max-width: 630px;
         }
 
-        /* Unique Organic Curved Card (Height aur spacing mazeed barha di gayi hai) */
         .portal-main-wrapper .login-card {
             background: rgba(255, 255, 255, 0.95);
             backdrop-filter: blur(20px);
             border: 1.5px solid rgba(230, 235, 230, 0.8);
             border-radius: 44px;
-            padding: 0 60px 50px 60px; /* Height aur width dono mein mazeed khula aur bara kar diya hai */
+            padding: 0 60px 50px 60px; 
             box-shadow: 0 25px 60px -15px rgba(0, 0, 0, 0.08),
                         0 1px 3px rgba(0, 0, 0, 0.03);
             position: relative;
@@ -119,7 +164,7 @@ exit;
             color: #2a3e32;
         }
 
-        /* Curved Leaf Accent Top Header */
+       
         .portal-main-wrapper .card-header-bg {
             margin: 0 -60px 32px -60px;
             padding: 44px 20px 54px 20px;
@@ -130,7 +175,7 @@ exit;
             box-shadow: 0 10px 25px rgba(56, 81, 66, 0.25);
         }
 
-        /* Floating Icon Ring */
+        
         .portal-main-wrapper .icon-badge {
             width: 82px;
             height: 82px;
@@ -171,7 +216,7 @@ exit;
         }
 
         .portal-main-wrapper .form-group {
-            margin-bottom: 20px; /* Fields ke darmiyan spacing barha di gayi hai taake height mazeed achi lage */
+            margin-bottom: 20px; 
         }
 
         .portal-main-wrapper .form-group label {
@@ -203,7 +248,7 @@ exit;
 
         .portal-main-wrapper .input-box input {
             width: 100%;
-            padding: 16px 18px 16px 48px; /* Input boxes ki height barha di gayi hai */
+            padding: 16px 18px 16px 48px; 
             font-family: inherit;
             font-size: 15px;
             font-weight: 500;
@@ -368,13 +413,30 @@ exit;
                 <p class="store-subtitle">Sign in to manage & order agricultural solutions</p>
 
                 <form action="" method="POST">
+   <!-- hidden input for csrf token  -->
+                     <input 
+        type="hidden" 
+        name="csrf_token" 
+        value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>"
+    >
+
+        <!-- login error -->
+
+                <?php if (!empty($login_error)) { ?>
+    <p class="login-error">
+        <?php echo htmlspecialchars($login_error); ?>
+    </p>
+<?php } ?>
 
                     <div class="form-group">
+
+
                         <label>Email Address</label>
                         <div class="input-box">
                             <input
                                 type="email"
                                 name="email"
+                                value="<?php echo htmlspecialchars($email) ?>"
                                 placeholder="yourname@domain.com"
                                 required
                             >
@@ -384,11 +446,7 @@ exit;
                                 </svg>
                             </span>
                         </div>
-                        <?php if(!empty($email_error)) { ?>
-                            <p class="login-error">
-                                <?php echo $email_error; ?>
-                            </p>
-                        <?php } ?>
+                        
                     </div>
 
                     <div class="form-group">
@@ -406,11 +464,7 @@ exit;
                                 </svg>
                             </span>
                         </div>
-                        <?php if(!empty($password_error)) { ?>
-                            <p class="login-error">
-                                <?php echo $password_error; ?>
-                            </p>
-                        <?php } ?>
+                     
                     </div>
 
                     <div class="form-options">

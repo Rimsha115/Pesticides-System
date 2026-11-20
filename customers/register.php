@@ -1,73 +1,103 @@
 <?php
-require_once "../config/database.php";
-require_once "../includes/header.php";
+session_start();
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
 
+require_once "../config/database.php";
 
 $name_error = "";
 $email_error = "";
+$phone_error = "";
 $password_error = "";
 $confirm_password_error = "";
 $success_message = "";
 
 if (isset($_POST['register'])) {
+    // CSRF token verification
+    if (
+        !isset($_POST['csrf_token']) ||
+        !isset($_SESSION['csrf_token']) ||
+        !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])
+    ) {
+        http_response_code(403);
+        exit("Invalid CSRF token. Please refresh the page and try again.");
+    }
 
-    // Receive form data
-    $email = $_POST['email'];
-    $password = $_POST['password'];
-    $name = $_POST['name'];
-    $phone = $_POST['phone'];
+    $name = trim($_POST['name'] ?? '');
+    $email = trim($_POST['email'] ?? '');
+    $phone = trim($_POST['phone'] ?? '');
+    $password = $_POST['password'] ?? '';
+    $confirm_password = $_POST['confirm_password'] ?? '';
 
-    $hashed_password = password_hash($password, PASSWORD_DEFAULT);
-
-    $confirm_password = $_POST['confirm_password'];
-
-    // Password validation
-    if ($password !== $confirm_password) {
-
-        $confirm_password_error =  "Passwords do not match!";
-
+    if (empty($name)) {
+        $name_error = "Name is required";
+    } elseif (mb_strlen($name) < 2 || mb_strlen($name) > 100) {
+        $name_error = "Name must be between 2 and 100 characters!";
+    } elseif (empty($email)) {
+        $email_error = "Email is required";
+    } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        $email_error = "Please enter a valid email address";
+    } elseif (empty($phone)) {
+        $phone_error = "Number is required.";
+    } elseif (!preg_match('/^03[0-9]{9}$/', $phone)) {
+        $phone_error = "Please enter a valid number";
+    } elseif (empty($password)) {
+        $password_error = "Password is required";
+    } elseif (mb_strlen($password) < 8) {
+        $password_error = "Password must be at least 8 characters long";
+    } elseif (!preg_match('/[A-Z]/', $password)) {
+        $password_error = "Password must contain at least one uppercase letter";
+    } elseif (!preg_match('/[a-z]/', $password)) {
+        $password_error = "Password must contain at least one lowercase letter";
+    } elseif (!preg_match('/[0-9]/', $password)) {
+        $password_error = "Password must contain at least one number";
+    } elseif (!preg_match('/[^a-zA-Z0-9]/', $password)) {
+        $password_error = "Password must contain at least one special character";
+    } elseif ($password !== $confirm_password) {
+        $confirm_password_error = "Passwords do not match!";
     } else {
+        $hashed_password = password_hash($password, PASSWORD_DEFAULT);
 
-        // Check duplicate email and Use prepared statement 
         $check_email = "SELECT id FROM users WHERE email = ?";
+        $stmt = mysqli_prepare($conn, $check_email);
 
-$stmt = mysqli_prepare($conn, $check_email);
+        if ($stmt) {
+            mysqli_stmt_bind_param($stmt, "s", $email);
+            mysqli_stmt_execute($stmt);
+            $result = mysqli_stmt_get_result($stmt);
 
-mysqli_stmt_bind_param($stmt, "s", $email);
+            if ($result && mysqli_num_rows($result) > 0) {
+                $email_error = "Email already exists!";
+                mysqli_stmt_close($stmt);
+            } else {
+                mysqli_stmt_close($stmt);
 
-mysqli_stmt_execute($stmt);
+                $insert_user = "INSERT 
+                INTO users (name, email, phone, password) VALUES (?, ?, ?, ?)";
+                $insert_stmt = mysqli_prepare($conn, $insert_user);
 
-$result = mysqli_stmt_get_result($stmt);
+                if ($insert_stmt) {
+                    mysqli_stmt_bind_param($insert_stmt, "ssss", $name, $email, $phone, $hashed_password);
+                    $inserted = mysqli_stmt_execute($insert_stmt);
+                    mysqli_stmt_close($insert_stmt);
 
-        if (mysqli_num_rows($result) > 0) {
-
-            $email_error = "Email already exists!";
-
+                    if ($inserted) {
+                        $_POST = [];
+                        $success_message = "Registration Successful!";
+                    } else {
+                        $success_message = "Registration failed. Please try again.";
+                    }
+                } else {
+                    $success_message = "Registration failed. Please try again.";
+                }
+            }
         } else {
-
-          $insert_user = "INSERT INTO users (name, email, phone, password)
-                VALUES (?, ?, ?, ?)";
-
-$stmt = mysqli_prepare($conn, $insert_user);
-
-mysqli_stmt_bind_param($stmt, "ssss", $name, $email, $phone, $hashed_password);
-
-$result = mysqli_stmt_execute($stmt);
-
-
-
-
-if ($result) {
-    $success_message = "Registration Successful!";
-} else {
-    echo "Registration Failed: " . mysqli_error($conn);
-}
-
+            $success_message = "Registration failed. Please try again.";
         }
     }
 }
 ?>
-
 <style>
 .agro-reg-wrapper {
     position: absolute;
@@ -230,7 +260,7 @@ if ($result) {
     font-size: 15.5px;
     font-weight: 600;
     cursor: pointer;
-    transition: background 0.2s ease, transform 0.1s ease;
+    transition: 0.2s ease, transform 0.1s ease;
     margin-top: 6px;
     box-shadow: 0 4px 12px rgba(0,0,0,0.15);
 }
@@ -305,38 +335,50 @@ if ($result) {
             <h2>Create Account</h2>
             <p class="register-subtitle">Sign up to access the pesticides purchasing system.</p>
             <form action="" method="POST">
+
+           <!-- CSRF hidden input -->
+         <input 
+        type="hidden" 
+        name="csrf_token" 
+        value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>"
+    >
+
+
                  <label>Full Name</label>
-                 <input type="text" name="name" placeholder="Enter your full name" required>
+                 <input type="text" name="name" placeholder="Enter your full name" value="<?php echo htmlspecialchars($_POST['name'] ?? ''); ?>" required>
                  <?php if(!empty($name_error)) { ?>
-                 <P class="error"><?php echo $name_error?></P>
+                 <P class="error"><?php echo htmlspecialchars($name_error); ?> </p>
                  <?php } ?>
 
 
                  <label>Email Address</label>
-                 <input type="email" name="email" placeholder="Enter your email address" required>
+                 <input type="email" name="email" placeholder="Enter your email address" value="<?php echo htmlspecialchars($_POST['email'] ?? ''); ?>" required>
                  <?php if(!empty($email_error)) { ?>
-                 <p class="error"> <?php echo $email_error ?></p>
+                 <p class="error"> <?php echo htmlspecialchars($email_error) ?></p>
                  <?php } ?>
 
 
                  <label>Phone Number</label>
-                 <input type="text" name="phone" placeholder="Enter your phone number" required>
-
+                 <input type="text" name="phone" placeholder="Enter your phone number" value="<?php echo htmlspecialchars($_POST['phone'] ?? ''); ?>" required>
+                 <?php if (!empty($phone_error)) { ?>
+                 <p class="error"><?php echo htmlspecialchars($phone_error); ?></p>
+                 <?php } ?>
+                   
                  <label>Password</label>
                  <input type="password" name="password" placeholder="Enter your password" required>
                  <?php if(!empty($password_error)) { ?>
-                 <p class="error"> <?php echo $password_error ?> </p>
+                 <p class="error"> <?php echo htmlspecialchars($password_error) ?> </p>
                  <?php } ?>
 
 
                  <label>Confirm Password</label>
                  <input type="password" name="confirm_password" placeholder="Re-enter your password" required>
                  <?php if(!empty($confirm_password_error)) { ?>
-                 <p class="error" ><?php echo $confirm_password_error ?></p>
+                 <p class="error" ><?php echo htmlspecialchars($confirm_password_error) ?></p>
                  <?php } ?>
 
 <?php if(!empty($success_message)) { ?>
-    <p class="success"><?php echo $success_message; ?></p>
+    <p class="success"><?php echo htmlspecialchars($success_message); ?></p>
 <?php } ?>
 
 
@@ -350,7 +392,3 @@ if ($result) {
         </div>
     </div>
 </div>
-
-<?php
-require_once "../includes/footer.php";
-?>
